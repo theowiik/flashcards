@@ -2,7 +2,7 @@
 
 A small, dependency-free flashcard app. Cards are saved in your browser's `localStorage`.
 
-**Live:** https://theowiik.github.io/flashcards/
+**Live:** https://theowiik.com/flashcards/
 
 ## Modes
 

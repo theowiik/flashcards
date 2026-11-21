@@ -117,9 +117,58 @@ function renderChrome(view, deck) {
   }
 }
 
-function newDeck() {
-  const name = prompt('Name for the new deck:', 'New deck');
-  if (!name?.trim()) return;
+// Custom modal. Resolves to the input text (when `input` is given), true for a
+// plain confirm, or null when cancelled.
+function modal({ title, message, input, confirmLabel = 'OK', danger = false }) {
+  return new Promise((resolve) => {
+    const field = input != null
+      ? h('input', { class: 'modal-input', value: input.value ?? '', placeholder: input.placeholder ?? '', 'aria-label': title, maxlength: '120' })
+      : null;
+    const okBtn = h('button', { class: `btn ${danger ? 'danger-solid' : 'primary'}`, type: 'submit' }, confirmLabel);
+    const form = h('form', { method: 'dialog', class: 'modal-body' },
+      h('h2', { class: 'modal-title' }, title),
+      message && h('p', { class: 'modal-message' }, message),
+      field,
+      h('div', { class: 'row modal-actions' },
+        h('button', { class: 'btn', type: 'button', onclick: () => close(null) }, 'Cancel'),
+        okBtn),
+    );
+    const dlg = h('dialog', { class: 'modal', 'aria-labelledby': 'modal-title' }, form);
+    form.querySelector('.modal-title').id = 'modal-title';
+
+    let done = false;
+    function close(result) {
+      if (done) return;
+      done = true;
+      dlg.close();
+      dlg.remove();
+      resolve(result);
+    }
+    const sync = () => { if (field) okBtn.disabled = !field.value.trim(); };
+    field?.addEventListener('input', sync);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (field && !field.value.trim()) return;
+      close(field ? field.value.trim() : true);
+    });
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(null); }); // Esc
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) close(null); }); // backdrop
+
+    document.body.append(dlg);
+    dlg.showModal();
+    sync();
+    if (field) { field.focus(); field.select(); }
+    else (danger ? form.querySelector('button[type=button]') : okBtn).focus();
+  });
+}
+
+async function newDeck() {
+  const name = await modal({
+    title: 'New deck',
+    input: { placeholder: 'e.g. Spanish verbs' },
+    confirmLabel: 'Create deck',
+  });
+  if (!name) return;
   const deck = { id: uid(), name: name.trim(), cards: [] };
   state.decks.push(deck);
   save();
@@ -514,8 +563,15 @@ function editView(deck) {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  function deleteDeck() {
-    if (!confirm(`Delete "${deck.name}" and its ${deck.cards.length} cards? This cannot be undone.`)) return;
+  async function deleteDeck() {
+    const n = deck.cards.length;
+    const ok = await modal({
+      title: `Delete “${deck.name}”?`,
+      message: `This removes the deck and its ${n} card${n === 1 ? '' : 's'}. This can’t be undone.`,
+      confirmLabel: 'Delete deck',
+      danger: true,
+    });
+    if (!ok) return;
     state.decks = state.decks.filter((d) => d !== deck);
     save();
     navigate('#/');

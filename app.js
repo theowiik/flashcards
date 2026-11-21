@@ -119,7 +119,7 @@ function render() {
   const deck = findDeck(id);
   if (deck && MODES[mode] && deck.cards.length >= MODES[mode].min) {
     topEl.replaceChildren(
-      h('a', { class: 'back', href: '#/', 'aria-label': 'Back to decks' }, '←'),
+      h('a', { class: 'back-link', href: '#/', 'aria-label': 'Back to decks' }, '←'),
       h('div', { class: 'title' }, h('strong', {}, deck.name), h('span', { class: 'muted' }, MODES[mode].label)),
     );
     (mode === 'classic' ? classicView : connectView)(deck);

@@ -71,11 +71,11 @@ textarea { resize: vertical; }
 /* top bar */
 .topbar { display: flex; align-items: center; gap: 12px; padding: 24px 0 20px; min-height: 84px; }
 .brand { font-size: 1.5rem; margin: 0; letter-spacing: -.01em; }
-.back {
+.back-link {
   display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px;
   color: var(--text); text-decoration: none; font-size: 1.3rem; border: 1px solid var(--border); background: var(--surface);
 }
-.back:hover { background: var(--surface-2); }
+.back-link:hover { background: var(--surface-2); }
 .title { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
 .title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title .muted { font-size: .85rem; }

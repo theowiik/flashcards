@@ -10,27 +10,12 @@
 </head>
 <body>
   <header class="topbar">
-    <h1 class="brand">Flashcards</h1>
-    <div class="deck-picker">
-      <label for="deck-select" class="sr-only">Deck</label>
-      <select id="deck-select"></select>
-      <button id="new-deck" class="btn ghost" title="New deck">+ Deck</button>
-    </div>
+    <a class="brand" href="#/">Flashcards</a>
+    <nav id="crumbs" class="crumbs" aria-label="Breadcrumb"></nav>
   </header>
 
-  <nav class="tabs" role="tablist">
-    <button role="tab" data-view="study">Study</button>
-    <button role="tab" data-view="connect">Connect</button>
-    <button role="tab" data-view="edit">Edit cards</button>
-  </nav>
+  <nav id="modes" class="tabs" aria-label="Practice mode" hidden></nav>
 
   <main id="view"></main>
-
-  <template id="tpl-empty">
-    <div class="empty">
-      <p>This deck has no cards yet.</p>
-      <button class="btn primary" data-goto="edit">Add cards</button>
-    </div>
-  </template>
 </body>
 </html>

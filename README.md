@@ -4,9 +4,11 @@ A small, dependency-free flashcard app. Cards are saved in your browser's `local
 
 **Live:** https://theowiik.com/flashcards/
 
-## Modes
+## How it works
 
-- **Study** — classic flashcards: see the question, think, reveal, then mark *Again* or *Got it*. Missed cards come back at the end. Keys: `Space` reveal, `1` again, `2` got it. Can be flipped to answer → question.
+The home screen is a grid of your decks. Open a deck, then pick how to practise it — every mode works on the same cards:
+
+- **Classic** —  flashcards: see the question, think, reveal, then mark *Again* or *Got it*. Missed cards come back at the end. Keys: `Space` reveal, `1` again, `2` got it. Can be flipped to answer → question.
 - **Connect** — questions on the left, shuffled answers on the right. Click a question and its answer to match them. Choose 3–8 pairs per round.
 
 ## Adding cards

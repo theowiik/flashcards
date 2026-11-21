@@ -18,10 +18,9 @@ function sampleDeck() {
 function load() {
   try {
     const data = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (data && Array.isArray(data.decks) && data.decks.length) return data;
+    if (data && Array.isArray(data.decks)) return data;
   } catch { /* fall through */ }
-  const deck = sampleDeck();
-  return { decks: [deck], activeDeckId: deck.id, view: 'study' };
+  return { decks: [sampleDeck()] };
 }
 
 const state = load();
@@ -29,7 +28,7 @@ function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   catch { toast('Could not save — storage is full or blocked'); }
 }
-const activeDeck = () => state.decks.find((d) => d.id === state.activeDeckId) ?? state.decks[0];
+const findDeck = (id) => state.decks.find((d) => d.id === id);
 
 // ---------- dom helpers ----------
 function h(tag, props = {}, ...children) {
@@ -65,62 +64,112 @@ function shuffle(arr) {
 }
 
 const viewEl = document.getElementById('view');
-const deckSelect = document.getElementById('deck-select');
+const crumbsEl = document.getElementById('crumbs');
+const modesEl = document.getElementById('modes');
 let cleanupView = () => {};
 
-// ---------- shell ----------
-function renderDeckPicker() {
-  deckSelect.replaceChildren(
-    ...state.decks.map((d) => h('option', { value: d.id, selected: d.id === activeDeck().id }, `${d.name} (${d.cards.length})`)),
-  );
-}
+// ---------- routing: #/  ·  #/deck/<id>  ·  #/deck/<id>/<mode> ----------
+const MODES = {
+  study: { label: 'Classic', icon: '🃏', desc: 'See the question, think of the answer, then reveal it.' },
+  connect: { label: 'Connect', icon: '🔗', desc: 'Match each question to its answer from a shuffled column.' },
+  edit: { label: 'Edit cards', icon: '✏️', desc: 'Add cards one by one, import CSV, or change existing ones.' },
+};
 
-deckSelect.addEventListener('change', () => {
-  state.activeDeckId = deckSelect.value;
-  save();
-  render();
-});
+const deckHref = (deck, mode) => `#/deck/${deck.id}${mode ? `/${mode}` : ''}`;
+const navigate = (hash) => { location.hash = hash; };
 
-document.getElementById('new-deck').addEventListener('click', () => {
-  const name = prompt('Name for the new deck:', 'New deck');
-  if (!name?.trim()) return;
-  const deck = { id: uid(), name: name.trim(), cards: [] };
-  state.decks.push(deck);
-  state.activeDeckId = deck.id;
-  state.view = 'edit';
-  save();
-  render();
-});
-
-document.querySelectorAll('.tabs button').forEach((b) =>
-  b.addEventListener('click', () => go(b.dataset.view)));
-
-function go(view) {
-  state.view = view;
-  save();
-  render();
+function parseRoute() {
+  const [, kind, id, mode] = location.hash.replace(/^#/, '').split('/');
+  if (kind !== 'deck') return { view: 'home' };
+  const deck = findDeck(id);
+  if (!deck) return { view: 'home' };
+  return { view: mode in MODES ? mode : 'deck', deck };
 }
 
 function render() {
   cleanupView();
   cleanupView = () => {};
-  renderDeckPicker();
-  const view = state.view in views ? state.view : 'study';
-  document.querySelectorAll('.tabs button').forEach((b) =>
-    b.setAttribute('aria-selected', String(b.dataset.view === view)));
+  const { view, deck } = parseRoute();
+  if (view === 'home' && location.hash && location.hash !== '#/') history.replaceState(null, '', '#/');
+  renderChrome(view, deck);
   viewEl.replaceChildren();
-  views[view](activeDeck());
+  window.scrollTo(0, 0);
+  if (view === 'home') homeView();
+  else if (view === 'deck') deckView(deck);
+  else views[view](deck);
+}
+window.addEventListener('hashchange', render);
+
+function renderChrome(view, deck) {
+  const crumbs = [];
+  if (deck) {
+    crumbs.push(h('span', { 'aria-hidden': 'true' }, '/'));
+    crumbs.push(view === 'deck'
+      ? h('span', { 'aria-current': 'page' }, deck.name)
+      : h('a', { href: deckHref(deck) }, deck.name));
+  }
+  crumbsEl.replaceChildren(...crumbs);
+
+  modesEl.hidden = !deck || view === 'deck';
+  if (deck) {
+    modesEl.replaceChildren(...Object.entries(MODES).map(([key, m]) =>
+      h('a', { href: deckHref(deck, key), 'aria-current': key === view ? 'page' : null }, m.label)));
+  }
 }
 
-function emptyState() {
-  const node = document.getElementById('tpl-empty').content.cloneNode(true);
-  node.querySelector('[data-goto]').addEventListener('click', () => go('edit'));
-  viewEl.append(node);
+function newDeck() {
+  const name = prompt('Name for the new deck:', 'New deck');
+  if (!name?.trim()) return;
+  const deck = { id: uid(), name: name.trim(), cards: [] };
+  state.decks.push(deck);
+  save();
+  navigate(deckHref(deck, 'edit'));
+}
+
+function emptyState(deck) {
+  viewEl.append(h('div', { class: 'empty' },
+    h('p', {}, 'This deck has no cards yet.'),
+    h('a', { class: 'btn primary', href: deckHref(deck, 'edit') }, 'Add cards')));
+}
+
+// ---------- home: grid of decks ----------
+function homeView() {
+  const tiles = state.decks.map((d) => h('a', { class: 'deck-tile', href: deckHref(d) },
+    h('span', { class: 'deck-name' }, d.name),
+    h('span', { class: 'deck-preview' }, d.cards.slice(0, 3).map((c) => c.q).join(' · ') || 'No cards yet'),
+    h('span', { class: 'deck-count' }, `${d.cards.length} card${d.cards.length === 1 ? '' : 's'}`),
+  ));
+  viewEl.append(
+    h('h2', { class: 'page-title' }, 'Your decks'),
+    h('div', { class: 'deck-grid' }, ...tiles,
+      h('button', { class: 'deck-tile new', onclick: newDeck }, h('span', { class: 'plus' }, '+'), 'New deck')),
+  );
+}
+
+// ---------- deck: choose how to practise ----------
+function deckView(deck) {
+  const n = deck.cards.length;
+  viewEl.append(
+    h('h2', { class: 'page-title' }, deck.name),
+    h('p', { class: 'muted' }, `${n} card${n === 1 ? '' : 's'} · How do you want to practise?`),
+    h('div', { class: 'mode-grid' }, ...Object.entries(MODES).map(([key, m]) => {
+      const blocked = (key === 'study' && n < 1) || (key === 'connect' && n < 2);
+      return h('a', {
+        class: `mode-tile${key === 'edit' ? ' secondary' : ''}${blocked ? ' disabled' : ''}`,
+        href: deckHref(deck, key),
+        'aria-disabled': blocked ? 'true' : null,
+        tabindex: blocked ? '-1' : null,
+      },
+      h('span', { class: 'mode-icon', 'aria-hidden': 'true' }, m.icon),
+      h('span', { class: 'mode-name' }, m.label),
+      h('span', { class: 'mode-desc' }, blocked ? (key === 'connect' ? 'Needs at least 2 cards.' : 'Add some cards first.') : m.desc));
+    })),
+  );
 }
 
 // ---------- study (classic) ----------
 function studyView(deck) {
-  if (!deck.cards.length) return emptyState();
+  if (!deck.cards.length) return emptyState(deck);
 
   let reversed = false;
   let queue, total, known, current, flipped;
@@ -202,7 +251,7 @@ function studyView(deck) {
   function onKey(e) {
     if (e.target.closest('input, textarea, select')) return;
     if (e.key === ' ' || e.key === 'Enter') {
-      if (e.target.closest('button') && e.target !== card) return; // let focused buttons work
+      if (e.target.closest('button, a') && e.target !== card) return; // let focused buttons work
       e.preventDefault(); flip();
     }
     else if (e.key === '1') grade(false);
@@ -219,9 +268,9 @@ const PAIR_COLORS = ['#3b5bdb', '#2b8a3e', '#e8590c', '#9c36b5', '#0c8599', '#c2
 
 function connectView(deck) {
   if (deck.cards.length < 2) {
-    if (!deck.cards.length) return emptyState();
+    if (!deck.cards.length) return emptyState(deck);
     viewEl.append(h('div', { class: 'empty' }, h('p', {}, 'Connect mode needs at least 2 cards.'),
-      h('button', { class: 'btn primary', onclick: () => go('edit') }, 'Add cards')));
+      h('a', { class: 'btn primary', href: deckHref(deck, 'edit') }, 'Add cards')));
     return;
   }
 
@@ -345,7 +394,7 @@ function editView(deck) {
   nameInput.addEventListener('change', () => {
     const v = nameInput.value.trim();
     if (!v) { nameInput.value = deck.name; return; }
-    deck.name = v; save(); renderDeckPicker();
+    deck.name = v; save(); renderChrome('edit', deck);
   });
   const deckPanel = h('section', { class: 'panel' },
     h('h2', {}, 'Deck'),
@@ -374,7 +423,6 @@ function editView(deck) {
     save();
     qIn.value = aIn.value = '';
     qIn.focus();
-    renderDeckPicker();
     drawList();
   }
 
@@ -399,7 +447,6 @@ function editView(deck) {
     bulk.value = '';
     notice.className = 'notice muted';
     notice.textContent = `Imported ${cards.length} card${cards.length === 1 ? '' : 's'}${skipped ? ` · skipped ${skipped} incomplete line${skipped === 1 ? '' : 's'}` : ''}.`;
-    renderDeckPicker();
     drawList();
   }
   const importPanel = h('section', { class: 'panel' },
@@ -454,7 +501,7 @@ function editView(deck) {
     }
     function remove() {
       deck.cards = deck.cards.filter((c) => c !== card);
-      save(); renderDeckPicker(); drawList();
+      save(); drawList();
     }
     show();
     return li;
@@ -470,9 +517,8 @@ function editView(deck) {
   function deleteDeck() {
     if (!confirm(`Delete "${deck.name}" and its ${deck.cards.length} cards? This cannot be undone.`)) return;
     state.decks = state.decks.filter((d) => d !== deck);
-    if (!state.decks.length) state.decks.push({ id: uid(), name: 'My deck', cards: [] });
-    state.activeDeckId = state.decks[0].id;
-    save(); render();
+    save();
+    navigate('#/');
   }
 
   viewEl.append(deckPanel, h('section', { class: 'panel' }, h('h2', {}, 'Add a card'), form), importPanel, listPanel);

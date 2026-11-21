@@ -1,31 +1,26 @@
 # Flashcards
 
-A small, dependency-free flashcard app. Cards are saved in your browser's `localStorage`.
+A small, dependency-free flashcard app. Everything is saved in your browser's `localStorage`.
 
 **Live:** https://theowiik.com/flashcards/
 
 ## How it works
 
-The home screen is a grid of your decks. Open a deck, then pick how to practise it — every mode works on the same cards:
+1. The home screen is a grid of your decks. **+** makes a new one, **✎** edits one.
+2. Tap a deck and pick how to practise it:
+   - **Classic** — see the question, think of the answer, reveal it, then mark *Again* or *Got it*. Missed cards come back. Keys: `Space` reveal, `1` again, `2` got it.
+   - **Connect** — match questions to their shuffled answers, 5 pairs per round.
 
-- **Classic** —  flashcards: see the question, think, reveal, then mark *Again* or *Got it*. Missed cards come back at the end. Keys: `Space` reveal, `1` again, `2` got it. Can be flipped to answer → question.
-- **Connect** — questions on the left, shuffled answers on the right. Click a question and its answer to match them. Choose 3–8 pairs per round.
+## Editing a deck
 
-## Adding cards
+The edit pop-up has a name and a list of question/answer rows. A new empty row appears as you type; `Enter` moves to the next field. You can also import CSV (paste or upload — comma, tab or semicolon, quotes supported, header optional) and export a deck to CSV:
 
-- One at a time from **Edit cards** (`Ctrl`+`Enter` to add).
-- Bulk import by pasting or uploading CSV. Comma, tab and semicolon are detected automatically, quotes are supported, and a `question,answer` header row is optional:
-
-  ```csv
-  question,answer
-  Capital of France,Paris
-  "Largest planet, by mass",Jupiter
-  ```
-
-- Export any deck back to CSV.
+```csv
+question,answer
+Capital of France,Paris
+"Largest planet, by mass",Jupiter
+```
 
 ## Development
 
-No build step. Serve the folder with any static server, e.g. `python3 -m http.server`, and open http://localhost:8000.
-
-Every push to `main` deploys to GitHub Pages via `.github/workflows/pages.yml`.
+No build step — serve the folder with any static server and open it. Every push to `main` deploys to GitHub Pages via `.github/workflows/pages.yml`.

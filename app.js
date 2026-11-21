@@ -7,7 +7,7 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 function sampleDeck() {
   return {
     id: uid(),
-    name: 'Sample: Capitals',
+    name: 'Capitals',
     cards: [
       ['France', 'Paris'], ['Japan', 'Tokyo'], ['Kenya', 'Nairobi'], ['Canada', 'Ottawa'],
       ['Australia', 'Canberra'], ['Brazil', 'Brasília'], ['Norway', 'Oslo'], ['Egypt', 'Cairo'],
@@ -18,7 +18,7 @@ function sampleDeck() {
 function load() {
   try {
     const data = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (data && Array.isArray(data.decks)) return data;
+    if (data && Array.isArray(data.decks)) return { decks: data.decks };
   } catch { /* fall through */ }
   return { decks: [sampleDeck()] };
 }
@@ -36,7 +36,6 @@ function h(tag, props = {}, ...children) {
   for (const [k, v] of Object.entries(props)) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k === 'style') el.style.cssText = v;
     else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'value' || (k in el && typeof v !== 'string')) el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
@@ -63,176 +62,292 @@ function shuffle(arr) {
   return a;
 }
 
-const viewEl = document.getElementById('view');
-const crumbsEl = document.getElementById('crumbs');
-const modesEl = document.getElementById('modes');
-let cleanupView = () => {};
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// ---------- routing: #/  ·  #/deck/<id>  ·  #/deck/<id>/<mode> ----------
+// ---------- modal ----------
+// Opens a <dialog> with the given content. `canDismiss()` decides whether Esc /
+// backdrop clicks may close it. Returns a close function.
+function openModal(content, { canDismiss = () => true, onBlocked = () => {}, onClose = () => {}, wide = false } = {}) {
+  const dlg = h('dialog', { class: `modal${wide ? ' wide' : ''}` }, content);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    dlg.close();
+    dlg.remove();
+    onClose();
+  };
+  const dismiss = () => (canDismiss() ? close() : onBlocked());
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); dismiss(); }); // Esc
+  dlg.addEventListener('mousedown', (e) => { if (e.target === dlg) dismiss(); }); // backdrop
+  document.body.append(dlg);
+  dlg.showModal();
+  return close;
+}
+
+function confirmModal({ title, message, confirmLabel }) {
+  return new Promise((resolve) => {
+    let result = false;
+    const cancel = h('button', { class: 'btn', onclick: () => close() }, 'Cancel');
+    const close = openModal(h('div', { class: 'modal-body' },
+      h('h2', {}, title),
+      h('p', { class: 'muted' }, message),
+      h('div', { class: 'modal-actions' }, cancel,
+        h('button', { class: 'btn danger', onclick: () => { result = true; close(); } }, confirmLabel)),
+    ), { onClose: () => resolve(result) });
+    cancel.focus();
+  });
+}
+
+// ---------- routing: #/  or  #/<deckId>/<classic|connect> ----------
 const MODES = {
-  study: { label: 'Classic', icon: '🃏', desc: 'See the question, think of the answer, then reveal it.' },
-  connect: { label: 'Connect', icon: '🔗', desc: 'Match each question to its answer from a shuffled column.' },
-  edit: { label: 'Edit cards', icon: '✏️', desc: 'Add cards one by one, import CSV, or change existing ones.' },
+  classic: { label: 'Classic', icon: '🃏', desc: 'Think of the answer, then reveal it.', min: 1 },
+  connect: { label: 'Connect', icon: '🔗', desc: 'Match questions to their answers.', min: 2 },
 };
 
-const deckHref = (deck, mode) => `#/deck/${deck.id}${mode ? `/${mode}` : ''}`;
-const navigate = (hash) => { location.hash = hash; };
-
-function parseRoute() {
-  const [, kind, id, mode] = location.hash.replace(/^#/, '').split('/');
-  if (kind !== 'deck') return { view: 'home' };
-  const deck = findDeck(id);
-  if (!deck) return { view: 'home' };
-  return { view: mode in MODES ? mode : 'deck', deck };
-}
+const topEl = document.getElementById('top');
+const viewEl = document.getElementById('view');
+let cleanupView = () => {};
 
 function render() {
   cleanupView();
   cleanupView = () => {};
-  const { view, deck } = parseRoute();
-  if (view === 'home' && location.hash && location.hash !== '#/') history.replaceState(null, '', '#/');
-  renderChrome(view, deck);
   viewEl.replaceChildren();
   window.scrollTo(0, 0);
-  if (view === 'home') homeView();
-  else if (view === 'deck') deckView(deck);
-  else views[view](deck);
+
+  const [, id, mode] = location.hash.replace(/^#/, '').split('/');
+  const deck = findDeck(id);
+  if (deck && MODES[mode] && deck.cards.length >= MODES[mode].min) {
+    topEl.replaceChildren(
+      h('a', { class: 'back', href: '#/', 'aria-label': 'Back to decks' }, '←'),
+      h('div', { class: 'title' }, h('strong', {}, deck.name), h('span', { class: 'muted' }, MODES[mode].label)),
+    );
+    (mode === 'classic' ? classicView : connectView)(deck);
+  } else {
+    if (location.hash && location.hash !== '#/') history.replaceState(null, '', '#/');
+    topEl.replaceChildren(h('h1', { class: 'brand' }, 'Flashcards'));
+    homeView();
+  }
 }
 window.addEventListener('hashchange', render);
 
-function renderChrome(view, deck) {
-  const crumbs = [];
-  if (deck) {
-    crumbs.push(h('span', { 'aria-hidden': 'true' }, '/'));
-    crumbs.push(view === 'deck'
-      ? h('span', { 'aria-current': 'page' }, deck.name)
-      : h('a', { href: deckHref(deck) }, deck.name));
-  }
-  crumbsEl.replaceChildren(...crumbs);
-
-  modesEl.hidden = !deck || view === 'deck';
-  if (deck) {
-    modesEl.replaceChildren(...Object.entries(MODES).map(([key, m]) =>
-      h('a', { href: deckHref(deck, key), 'aria-current': key === view ? 'page' : null }, m.label)));
-  }
-}
-
-// Custom modal. Resolves to the input text (when `input` is given), true for a
-// plain confirm, or null when cancelled.
-function modal({ title, message, input, confirmLabel = 'OK', danger = false }) {
-  return new Promise((resolve) => {
-    const field = input != null
-      ? h('input', { class: 'modal-input', value: input.value ?? '', placeholder: input.placeholder ?? '', 'aria-label': title, maxlength: '120' })
-      : null;
-    const okBtn = h('button', { class: `btn ${danger ? 'danger-solid' : 'primary'}`, type: 'submit' }, confirmLabel);
-    const form = h('form', { method: 'dialog', class: 'modal-body' },
-      h('h2', { class: 'modal-title' }, title),
-      message && h('p', { class: 'modal-message' }, message),
-      field,
-      h('div', { class: 'row modal-actions' },
-        h('button', { class: 'btn', type: 'button', onclick: () => close(null) }, 'Cancel'),
-        okBtn),
-    );
-    const dlg = h('dialog', { class: 'modal', 'aria-labelledby': 'modal-title' }, form);
-    form.querySelector('.modal-title').id = 'modal-title';
-
-    let done = false;
-    function close(result) {
-      if (done) return;
-      done = true;
-      dlg.close();
-      dlg.remove();
-      resolve(result);
-    }
-    const sync = () => { if (field) okBtn.disabled = !field.value.trim(); };
-    field?.addEventListener('input', sync);
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      if (field && !field.value.trim()) return;
-      close(field ? field.value.trim() : true);
-    });
-    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(null); }); // Esc
-    dlg.addEventListener('click', (e) => { if (e.target === dlg) close(null); }); // backdrop
-
-    document.body.append(dlg);
-    dlg.showModal();
-    sync();
-    if (field) { field.focus(); field.select(); }
-    else (danger ? form.querySelector('button[type=button]') : okBtn).focus();
-  });
-}
-
-async function newDeck() {
-  const name = await modal({
-    title: 'New deck',
-    input: { placeholder: 'e.g. Spanish verbs' },
-    confirmLabel: 'Create deck',
-  });
-  if (!name) return;
-  const deck = { id: uid(), name: name.trim(), cards: [] };
-  state.decks.push(deck);
-  save();
-  navigate(deckHref(deck, 'edit'));
-}
-
-function emptyState(deck) {
-  viewEl.append(h('div', { class: 'empty' },
-    h('p', {}, 'This deck has no cards yet.'),
-    h('a', { class: 'btn primary', href: deckHref(deck, 'edit') }, 'Add cards')));
-}
-
-// ---------- home: grid of decks ----------
+// ---------- home ----------
 function homeView() {
-  const tiles = state.decks.map((d) => h('a', { class: 'deck-tile', href: deckHref(d) },
-    h('span', { class: 'deck-name' }, d.name),
-    h('span', { class: 'deck-preview' }, d.cards.slice(0, 3).map((c) => c.q).join(' · ') || 'No cards yet'),
-    h('span', { class: 'deck-count' }, `${d.cards.length} card${d.cards.length === 1 ? '' : 's'}`),
-  ));
-  viewEl.append(
-    h('h2', { class: 'page-title' }, 'Your decks'),
-    h('div', { class: 'deck-grid' }, ...tiles,
-      h('button', { class: 'deck-tile new', onclick: newDeck }, h('span', { class: 'plus' }, '+'), 'New deck')),
-  );
+  const tiles = state.decks.map((deck) => {
+    const n = deck.cards.length;
+    return h('div', { class: 'deck' },
+      h('button', { class: 'deck-open', onclick: () => (n ? pickMode(deck) : editDeck(deck)) },
+        h('span', { class: 'deck-name' }, deck.name),
+        h('span', { class: 'deck-count muted' }, n ? plural(n, 'card') : 'Empty — tap to add cards')),
+      h('button', { class: 'deck-edit', 'aria-label': `Edit ${deck.name}`, title: 'Edit', onclick: () => editDeck(deck) }, '✎'),
+    );
+  });
+  viewEl.append(h('div', { class: 'grid' }, ...tiles,
+    h('button', { class: 'deck add', onclick: () => editDeck(null) }, h('span', { class: 'plus' }, '+'), 'New deck')));
 }
 
-// ---------- deck: choose how to practise ----------
-function deckView(deck) {
-  const n = deck.cards.length;
-  viewEl.append(
-    h('h2', { class: 'page-title' }, deck.name),
-    h('p', { class: 'muted' }, `${n} card${n === 1 ? '' : 's'} · How do you want to practise?`),
-    h('div', { class: 'mode-grid' }, ...Object.entries(MODES).map(([key, m]) => {
-      const blocked = (key === 'study' && n < 1) || (key === 'connect' && n < 2);
-      return h('a', {
-        class: `mode-tile${key === 'edit' ? ' secondary' : ''}${blocked ? ' disabled' : ''}`,
-        href: deckHref(deck, key),
-        'aria-disabled': blocked ? 'true' : null,
-        tabindex: blocked ? '-1' : null,
-      },
-      h('span', { class: 'mode-icon', 'aria-hidden': 'true' }, m.icon),
-      h('span', { class: 'mode-name' }, m.label),
-      h('span', { class: 'mode-desc' }, blocked ? (key === 'connect' ? 'Needs at least 2 cards.' : 'Add some cards first.') : m.desc));
+function pickMode(deck) {
+  const choose = (key) => { close(); location.hash = `#/${deck.id}/${key}`; };
+  const close = openModal(h('div', { class: 'modal-body' },
+    h('h2', {}, deck.name),
+    h('p', { class: 'muted' }, 'How do you want to practise?'),
+    h('div', { class: 'modes' }, ...Object.entries(MODES).map(([key, m]) => {
+      const blocked = deck.cards.length < m.min;
+      return h('button', { class: 'mode', disabled: blocked, onclick: () => choose(key) },
+        h('span', { class: 'mode-icon', 'aria-hidden': 'true' }, m.icon),
+        h('span', { class: 'mode-name' }, m.label),
+        h('span', { class: 'muted' }, blocked ? `Needs at least ${m.min} cards` : m.desc));
     })),
-  );
+  ));
 }
 
-// ---------- study (classic) ----------
-function studyView(deck) {
-  if (!deck.cards.length) return emptyState(deck);
+// ---------- edit deck (modal) ----------
+function editDeck(deck) {
+  const isNew = !deck;
+  let dirty = false;
+  const markDirty = () => { dirty = true; };
 
-  let reversed = false;
+  const nameIn = h('input', { class: 'name-input', value: deck?.name ?? '', placeholder: 'Deck name', 'aria-label': 'Deck name', oninput: markDirty });
+  const rowsEl = h('div', { class: 'rows' });
+  const error = h('p', { class: 'error', hidden: true });
+
+  function addRow(q = '', a = '') {
+    const qIn = h('input', { value: q, placeholder: 'Question', 'aria-label': 'Question' });
+    const aIn = h('input', { value: a, placeholder: 'Answer', 'aria-label': 'Answer' });
+    const row = h('div', { class: 'card-row' }, qIn, aIn,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove card', tabindex: '-1', onclick: () => { row.remove(); markDirty(); ensureBlankRow(); } }, '✕'));
+    row.qIn = qIn; row.aIn = aIn;
+    for (const input of [qIn, aIn]) {
+      input.addEventListener('input', () => { markDirty(); ensureBlankRow(); });
+    }
+    // Enter in the answer field jumps to the next question.
+    aIn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); ensureBlankRow(); row.nextElementSibling?.qIn.focus(); }
+    });
+    qIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); aIn.focus(); } });
+    rowsEl.append(row);
+    return row;
+  }
+  // Always keep exactly one empty row at the bottom to type into.
+  function ensureBlankRow() {
+    const last = rowsEl.lastElementChild;
+    if (!last || last.qIn.value.trim() || last.aIn.value.trim()) addRow();
+  }
+
+  (deck?.cards ?? []).forEach((c) => addRow(c.q, c.a));
+  ensureBlankRow();
+
+  // CSV import, tucked away
+  const csvIn = h('textarea', { rows: 5, placeholder: 'question,answer\nCapital of France,Paris\n"Largest planet, by mass",Jupiter' });
+  const fileIn = h('input', { type: 'file', accept: '.csv,.tsv,.txt,text/csv,text/plain', hidden: true });
+  fileIn.addEventListener('change', async () => {
+    if (fileIn.files[0]) csvIn.value = await fileIn.files[0].text();
+    fileIn.value = '';
+  });
+  const importDetails = h('details', { class: 'import' },
+    h('summary', {}, 'Import from CSV'),
+    h('p', { class: 'muted small' }, 'One card per line: question, then answer. Comma, tab or semicolon separated.'),
+    csvIn,
+    h('div', { class: 'modal-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: () => fileIn.click() }, 'Choose file…'), fileIn,
+      h('button', { class: 'btn', type: 'button', onclick: importCSV }, 'Add these cards')),
+  );
+  function importCSV() {
+    const { cards, skipped } = rowsToCards(parseCSV(csvIn.value));
+    if (!cards.length) return toast('No cards found — each line needs a question and an answer');
+    rowsEl.lastElementChild?.remove(); // drop the blank row, re-add after
+    cards.forEach((c) => addRow(c.q, c.a));
+    ensureBlankRow();
+    markDirty();
+    csvIn.value = '';
+    importDetails.open = false;
+    toast(`Added ${plural(cards.length, 'card')}${skipped ? ` · skipped ${skipped}` : ''}`);
+  }
+
+  function collect() {
+    const cards = [];
+    let incomplete = 0;
+    for (const row of rowsEl.children) {
+      const q = row.qIn.value.trim(), a = row.aIn.value.trim();
+      if (q && a) cards.push({ q, a });
+      else if (q || a) { incomplete++; row.classList.add('bad'); }
+    }
+    return { cards, incomplete };
+  }
+
+  function onSave() {
+    rowsEl.querySelectorAll('.bad').forEach((r) => r.classList.remove('bad'));
+    const name = nameIn.value.trim();
+    const { cards, incomplete } = collect();
+    if (!name) return showError('Give the deck a name.', nameIn);
+    if (incomplete) return showError(`${plural(incomplete, 'card')} ${incomplete === 1 ? 'is' : 'are'} missing a question or answer.`);
+    const target = deck ?? { id: uid() };
+    const old = new Map((deck?.cards ?? []).map((c) => [`${c.q}\u0000${c.a}`, c.id]));
+    target.name = name;
+    target.cards = cards.map((c) => ({ id: old.get(`${c.q}\u0000${c.a}`) ?? uid(), ...c }));
+    if (isNew) state.decks.push(target);
+    save();
+    close();
+    render();
+  }
+  function showError(msg, focus) {
+    error.textContent = msg;
+    error.hidden = false;
+    focus?.focus();
+  }
+
+  async function onDelete() {
+    const ok = await confirmModal({
+      title: `Delete “${deck.name}”?`,
+      message: `This removes the deck and its ${plural(deck.cards.length, 'card')}. It can’t be undone.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    state.decks = state.decks.filter((d) => d !== deck);
+    save();
+    close();
+    render();
+  }
+
+  function onExport() {
+    const { cards } = collect();
+    const blob = new Blob([toCSV(cards)], { type: 'text/csv' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: `${(nameIn.value.trim() || 'deck').replace(/[^\w-]+/g, '_')}.csv` });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  const close = openModal(h('div', { class: 'modal-body' },
+    h('div', { class: 'modal-head' },
+      h('h2', {}, isNew ? 'New deck' : 'Edit deck'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => tryClose() }, '✕')),
+    nameIn,
+    rowsEl,
+    importDetails,
+    error,
+    h('div', { class: 'modal-actions spread' },
+      h('div', { class: 'modal-actions' },
+        !isNew && h('button', { class: 'btn ghost danger-text', onclick: onDelete }, 'Delete'),
+        !isNew && h('button', { class: 'btn ghost', onclick: onExport }, 'Export CSV')),
+      h('button', { class: 'btn primary', onclick: onSave }, 'Save')),
+  ), { wide: true, canDismiss: () => !dirty, onBlocked: () => tryClose() });
+
+  function tryClose() {
+    if (!dirty) return close();
+    confirmModal({ title: 'Discard changes?', message: 'Your edits to this deck won’t be saved.', confirmLabel: 'Discard' })
+      .then((ok) => ok && close());
+  }
+
+  (isNew ? nameIn : rowsEl.lastElementChild.qIn).focus();
+}
+
+// ---------- classic: think, reveal, grade ----------
+function classicView(deck) {
   let queue, total, known, current, flipped;
+
+  const bar = h('div');
+  const count = h('span', { class: 'muted' });
+  const front = h('div', { class: 'face front' });
+  const back = h('div', { class: 'face back' });
+  const card = h('button', { class: 'card', onclick: flip }, h('div', { class: 'card-inner' }, front, back));
+  const revealBtn = h('button', { class: 'btn primary big', onclick: flip }, 'Show answer');
+  const gradeBtns = h('div', { class: 'grade', hidden: true },
+    h('button', { class: 'btn big again', onclick: () => grade(false) }, 'Again'),
+    h('button', { class: 'btn big good', onclick: () => grade(true) }, 'Got it'));
+  const stage = h('div', { class: 'stage' },
+    h('div', { class: 'progress-row' }, h('div', { class: 'progress' }, bar), count),
+    card, revealBtn, gradeBtns);
+  viewEl.append(stage);
 
   function restart() {
     queue = shuffle(deck.cards);
     total = queue.length;
     known = 0;
+    viewEl.replaceChildren(stage);
     next();
   }
   function next() {
     current = queue.shift();
     flipped = false;
-    draw();
+    if (!current) return finished(`You know all ${plural(total, 'card')}.`, restart);
+    bar.style.width = `${(known / total) * 100}%`;
+    count.textContent = `${known} / ${total}`;
+    // Snap back to the front without animating so the next answer never flashes.
+    card.classList.add('instant');
+    card.classList.remove('flipped');
+    void card.offsetWidth;
+    card.classList.remove('instant');
+    front.textContent = current.q;
+    back.textContent = current.a;
+    revealBtn.hidden = false;
+    gradeBtns.hidden = true;
+  }
+  function flip() {
+    if (!current) return;
+    flipped = !flipped;
+    card.classList.toggle('flipped', flipped);
+    revealBtn.hidden = flipped;
+    gradeBtns.hidden = !flipped;
   }
   function grade(gotIt) {
     if (!flipped) return;
@@ -240,69 +355,10 @@ function studyView(deck) {
     else queue.push(current);
     next();
   }
-  function flip() {
-    if (!current) return;
-    flipped = !flipped;
-    card.classList.toggle('flipped', flipped);
-    controls.hidden = !flipped;
-    revealBtn.hidden = flipped;
-  }
-
-  const bar = h('div');
-  const progress = h('div', { class: 'progress', 'aria-hidden': 'true' }, bar);
-  const status = h('div', { class: 'muted' });
-  const front = h('div', { class: 'face front' });
-  const back = h('div', { class: 'face back' });
-  const card = h('button', { class: 'card', onclick: flip, 'aria-live': 'polite' },
-    h('div', { class: 'card-inner' }, front, back));
-  const revealBtn = h('button', { class: 'btn primary', onclick: flip }, 'Reveal answer');
-  const controls = h('div', { class: 'row', hidden: true },
-    h('button', { class: 'btn bad', onclick: () => grade(false) }, 'Again'),
-    h('button', { class: 'btn good', onclick: () => grade(true) }, 'Got it'),
-  );
-  const options = h('div', { class: 'row spread', style: 'width:100%' },
-    status,
-    h('div', { class: 'row' },
-      h('label', { class: 'row muted' },
-        h('input', { type: 'checkbox', onchange: (e) => { reversed = e.target.checked; draw(); } }),
-        'Answer → question'),
-      h('button', { class: 'btn small', onclick: restart }, 'Restart'),
-    ),
-  );
-  const hint = h('p', { class: 'hint' },
-    h('kbd', {}, 'Space'), ' reveal · ', h('kbd', {}, '1'), ' again · ', h('kbd', {}, '2'), ' got it');
-  const wrap = h('div', { class: 'study' }, options, progress, card, revealBtn, controls, hint);
-  viewEl.append(wrap);
-
-  function draw() {
-    bar.style.width = `${(known / total) * 100}%`;
-    if (!current) {
-      wrap.replaceChildren(h('div', { class: 'result' },
-        h('p', { class: 'big' }, 'Deck complete 🎉'),
-        h('p', { class: 'muted' }, `You went through all ${total} cards.`),
-        h('button', { class: 'btn primary', onclick: () => { wrap.replaceChildren(options, progress, card, revealBtn, controls, hint); restart(); } }, 'Study again'),
-      ));
-      return;
-    }
-    status.textContent = `${known} / ${total} known · ${queue.length + 1} left`;
-    // Snap back to the front without animating, so the next answer never flashes.
-    card.classList.add('instant');
-    card.classList.remove('flipped');
-    void card.offsetWidth;
-    card.classList.remove('instant');
-    const [q, a] = reversed ? [current.a, current.q] : [current.q, current.a];
-    front.replaceChildren(h('span', { class: 'label' }, reversed ? 'Answer' : 'Question'), q);
-    back.replaceChildren(h('span', { class: 'label' }, reversed ? 'Question' : 'Answer'), a);
-    controls.hidden = true;
-    revealBtn.hidden = false;
-  }
 
   function onKey(e) {
-    if (e.target.closest('input, textarea, select')) return;
-    if (e.key === ' ' || e.key === 'Enter') {
-      if (e.target.closest('button, a') && e.target !== card) return; // let focused buttons work
-      e.preventDefault(); flip();
-    }
+    if (document.querySelector('dialog[open]')) return;
+    if (e.key === ' ' && !e.target.closest('button, a')) { e.preventDefault(); flip(); }
     else if (e.key === '1') grade(false);
     else if (e.key === '2') grade(true);
   }
@@ -312,274 +368,88 @@ function studyView(deck) {
   restart();
 }
 
-// ---------- connect (matching) ----------
-const PAIR_COLORS = ['#3b5bdb', '#2b8a3e', '#e8590c', '#9c36b5', '#0c8599', '#c2255c', '#5c940d', '#d6336c'];
+// ---------- connect: match pairs ----------
+const PER_ROUND = 5;
+const PAIR_COLORS = ['#3b5bdb', '#2b8a3e', '#e8590c', '#9c36b5', '#0c8599', '#c2255c'];
 
 function connectView(deck) {
-  if (deck.cards.length < 2) {
-    if (!deck.cards.length) return emptyState(deck);
-    viewEl.append(h('div', { class: 'empty' }, h('p', {}, 'Connect mode needs at least 2 cards.'),
-      h('a', { class: 'btn primary', href: deckHref(deck, 'edit') }, 'Add cards')));
-    return;
-  }
+  let pool, round, matched, mistakes, roundNo, rounds, selected;
 
-  let perRound = Math.min(state.connectSize ?? 5, deck.cards.length);
-  let pool, round, mistakes, totalMistakes, matchedCount, roundNo, selected;
+  const status = h('p', { class: 'muted center' });
+  const board = h('div', { class: 'connect' });
 
-  function startSession() {
+  function start() {
     pool = shuffle(deck.cards);
-    totalMistakes = 0;
+    rounds = Math.ceil(pool.length / PER_ROUND);
     roundNo = 0;
+    mistakes = 0;
+    viewEl.replaceChildren(status, board);
     nextRound();
   }
 
   function nextRound() {
-    round = pool.splice(0, perRound);
-    if (!round.length) return finish();
+    round = pool.splice(0, PER_ROUND);
+    if (!round.length) return finished(`${plural(deck.cards.length, 'pair')} matched with ${plural(mistakes, 'mistake')}.`, start);
     roundNo++;
-    mistakes = 0;
-    matchedCount = 0;
+    matched = 0;
     selected = null;
-    drawRound();
-  }
-
-  const sizeSelect = h('select', {
-    'aria-label': 'Pairs per round',
-    onchange: (e) => { perRound = Number(e.target.value); state.connectSize = perRound; save(); startSession(); },
-  }, ...[3, 4, 5, 6, 8].map((n) => h('option', { value: n, selected: n === perRound }, `${n} pairs`)));
-  const status = h('div', { class: 'muted' });
-  const board = h('div');
-  viewEl.append(
-    h('div', { class: 'row spread', style: 'margin-bottom:16px' }, status,
-      h('div', { class: 'row' }, sizeSelect,
-        h('button', { class: 'btn small', onclick: startSession }, 'Restart'))),
-    board,
-  );
-
-  function drawRound() {
-    const qTiles = round.map((c) => h('button', { class: 'tile', 'data-side': 'q' }, c.q));
-    qTiles.forEach((t, i) => { t.card = round[i]; });
-    const aCards = shuffle(round);
-    const aTiles = aCards.map((c) => h('button', { class: 'tile', 'data-side': 'a' }, c.a));
-    aTiles.forEach((t, i) => { t.card = aCards[i]; });
-
-    for (const t of [...qTiles, ...aTiles]) t.addEventListener('click', () => pick(t));
-
-    board.replaceChildren(h('div', { class: 'connect-grid' },
-      h('div', { class: 'connect-col' }, h('h3', {}, 'Questions'), ...qTiles),
-      h('div', { class: 'connect-col' }, h('h3', {}, 'Answers'), ...aTiles),
-    ));
+    const tile = (card, side) => {
+      const t = h('button', { class: 'tile', onclick: () => pick(t) }, side === 'q' ? card.q : card.a);
+      t.card = card; t.side = side;
+      return t;
+    };
+    board.replaceChildren(
+      h('div', { class: 'col' }, ...round.map((c) => tile(c, 'q'))),
+      h('div', { class: 'col' }, ...shuffle(round).map((c) => tile(c, 'a'))),
+    );
     updateStatus();
   }
 
   function updateStatus() {
-    const rounds = roundNo + Math.ceil(pool.length / perRound);
-    status.textContent = `Round ${roundNo} of ${rounds} · ${matchedCount}/${round.length} matched · ${mistakes} mistake${mistakes === 1 ? '' : 's'}`;
+    status.textContent = `${rounds > 1 ? `Round ${roundNo} of ${rounds} · ` : ''}${plural(mistakes, 'mistake')}`;
   }
 
-  function pick(tile) {
-    if (tile.classList.contains('matched')) return;
-    if (!selected || selected.dataset.side === tile.dataset.side) {
+  function pick(t) {
+    if (t.classList.contains('matched')) return;
+    if (!selected || selected.side === t.side) {
       selected?.classList.remove('selected');
-      selected = selected === tile ? null : tile;
+      selected = selected === t ? null : t;
       selected?.classList.add('selected');
       return;
     }
-    const [qt, at] = tile.dataset.side === 'q' ? [tile, selected] : [selected, tile];
+    const [q, a] = t.side === 'q' ? [t, selected] : [selected, t];
     selected.classList.remove('selected');
     selected = null;
-    // Match on text so duplicate answers in a deck are both accepted.
-    if (qt.card.id === at.card.id || qt.card.a.trim() === at.card.a.trim()) {
-      const color = PAIR_COLORS[matchedCount % PAIR_COLORS.length];
-      for (const t of [qt, at]) {
-        t.classList.add('matched');
-        t.style.setProperty('--pair', color);
-        t.setAttribute('aria-disabled', 'true');
-      }
-      matchedCount++;
-      updateStatus();
-      if (matchedCount === round.length) {
-        totalMistakes += mistakes;
-        setTimeout(roundDone, 400);
-      }
+    // Compare answer text so decks with duplicate answers still work.
+    if (q.card.id === a.card.id || q.card.a.trim() === a.card.a.trim()) {
+      const color = PAIR_COLORS[matched % PAIR_COLORS.length];
+      for (const x of [q, a]) { x.classList.add('matched'); x.style.setProperty('--pair', color); }
+      matched++;
+      if (matched === round.length) setTimeout(nextRound, 500);
     } else {
       mistakes++;
-      updateStatus();
-      for (const t of [qt, at]) {
-        t.classList.remove('wrong');
-        void t.offsetWidth; // restart animation
-        t.classList.add('wrong');
-        setTimeout(() => t.classList.remove('wrong'), 600);
+      for (const x of [q, a]) {
+        x.classList.remove('wrong');
+        void x.offsetWidth;
+        x.classList.add('wrong');
+        setTimeout(() => x.classList.remove('wrong'), 500);
       }
     }
+    updateStatus();
   }
 
-  function roundDone() {
-    if (!pool.length) return finish();
-    board.replaceChildren(h('div', { class: 'result' },
-      h('p', { class: 'big' }, mistakes === 0 ? 'Perfect round!' : 'Round complete'),
-      h('p', { class: 'muted' }, `${mistakes} mistake${mistakes === 1 ? '' : 's'} this round.`),
-      h('button', { class: 'btn primary', onclick: nextRound, autofocus: true }, 'Next round →'),
-    ));
-    board.querySelector('button').focus();
-  }
-
-  function finish() {
-    status.textContent = '';
-    board.replaceChildren(h('div', { class: 'result' },
-      h('p', { class: 'big' }, 'All matched 🎉'),
-      h('p', { class: 'muted' }, `${deck.cards.length} pairs · ${totalMistakes} mistake${totalMistakes === 1 ? '' : 's'} total.`),
-      h('button', { class: 'btn primary', onclick: startSession }, 'Play again'),
-    ));
-  }
-
-  startSession();
+  start();
 }
 
-// ---------- edit ----------
-function editView(deck) {
-  // Deck settings
-  const nameInput = h('input', { value: deck.name, 'aria-label': 'Deck name', style: 'flex:1;min-width:160px' });
-  nameInput.addEventListener('change', () => {
-    const v = nameInput.value.trim();
-    if (!v) { nameInput.value = deck.name; return; }
-    deck.name = v; save(); renderChrome('edit', deck);
-  });
-  const deckPanel = h('section', { class: 'panel' },
-    h('h2', {}, 'Deck'),
-    h('div', { class: 'row' }, nameInput,
-      h('button', { class: 'btn', onclick: exportCSV, disabled: !deck.cards.length }, 'Export CSV'),
-      h('button', { class: 'btn danger', onclick: deleteDeck }, 'Delete deck')),
-  );
-
-  // One-by-one
-  const qIn = h('textarea', { rows: 2, required: true, placeholder: 'e.g. Capital of France' });
-  const aIn = h('textarea', { rows: 2, required: true, placeholder: 'e.g. Paris' });
-  const form = h('form', { class: 'add-form', onsubmit: (e) => { e.preventDefault(); addOne(); } },
-    h('label', {}, 'Question', qIn),
-    h('label', {}, 'Answer', aIn),
-    h('div', { class: 'row actions spread' },
-      h('span', { class: 'hint' }, h('kbd', {}, 'Ctrl'), ' + ', h('kbd', {}, 'Enter'), ' to add'),
-      h('button', { class: 'btn primary', type: 'submit' }, 'Add card')),
-  );
-  form.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addOne(); }
-  });
-  function addOne() {
-    const q = qIn.value.trim(), a = aIn.value.trim();
-    if (!q || !a) { (q ? aIn : qIn).focus(); return; }
-    deck.cards.push({ id: uid(), q, a });
-    save();
-    qIn.value = aIn.value = '';
-    qIn.focus();
-    drawList();
-  }
-
-  // Bulk import
-  const bulk = h('textarea', { rows: 6, placeholder: 'question,answer\nCapital of France,Paris\n"Largest planet, by mass",Jupiter' });
-  const fileIn = h('input', { type: 'file', accept: '.csv,.tsv,.txt,text/csv,text/plain', class: 'sr-only', id: 'csv-file' });
-  const notice = h('p', { class: 'notice muted' }, 'One card per line: question and answer separated by a comma, tab, or semicolon. Use quotes for values containing commas. A header row is optional.');
-  fileIn.addEventListener('change', async () => {
-    const f = fileIn.files[0];
-    if (f) bulk.value = await f.text();
-    fileIn.value = '';
-  });
-  function importBulk() {
-    const { cards, skipped } = rowsToCards(parseCSV(bulk.value));
-    if (!cards.length) {
-      notice.className = 'notice bad';
-      notice.textContent = 'No cards found. Each line needs a question and an answer.';
-      return;
-    }
-    deck.cards.push(...cards.map((c) => ({ id: uid(), ...c })));
-    save();
-    bulk.value = '';
-    notice.className = 'notice muted';
-    notice.textContent = `Imported ${cards.length} card${cards.length === 1 ? '' : 's'}${skipped ? ` · skipped ${skipped} incomplete line${skipped === 1 ? '' : 's'}` : ''}.`;
-    drawList();
-  }
-  const importPanel = h('section', { class: 'panel' },
-    h('h2', {}, 'Import from CSV'),
-    bulk, notice,
-    h('div', { class: 'row spread' },
-      h('label', { class: 'btn', for: 'csv-file' }, 'Choose file…', fileIn),
-      h('button', { class: 'btn primary', onclick: importBulk }, 'Import')),
-  );
-
-  // List
-  const list = h('ul', { class: 'card-list' });
-  const listHeader = h('h2');
-  const listPanel = h('section', { class: 'panel' }, listHeader, list);
-
-  function drawList() {
-    listHeader.textContent = `Cards (${deck.cards.length})`;
-    deckPanel.querySelector('button').disabled = !deck.cards.length;
-    if (!deck.cards.length) {
-      list.replaceChildren(h('li', { class: 'muted', style: 'display:block' }, 'No cards yet.'));
-      return;
-    }
-    list.replaceChildren(...deck.cards.map(cardRow).reverse());
-  }
-
-  function cardRow(card) {
-    const li = h('li');
-    let onEditKey = null;
-    li.addEventListener('keydown', (e) => onEditKey?.(e));
-    const show = () => { onEditKey = null; li.replaceChildren(
-      h('div', { class: 'q' }, card.q),
-      h('div', { class: 'a' }, card.a),
-      h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: edit }, 'Edit'),
-        h('button', { class: 'btn small danger', 'aria-label': 'Delete card', onclick: remove }, '✕')),
-    ); };
-    function edit() {
-      const q = h('textarea', { rows: 2, value: card.q });
-      const a = h('textarea', { rows: 2, value: card.a });
-      const commit = () => {
-        if (!q.value.trim() || !a.value.trim()) return toast('Question and answer are required');
-        card.q = q.value.trim(); card.a = a.value.trim(); save(); show();
-      };
-      li.replaceChildren(q, a, h('div', { class: 'row' },
-        h('button', { class: 'btn small primary', onclick: commit }, 'Save'),
-        h('button', { class: 'btn small', onclick: show }, 'Cancel')));
-      onEditKey = (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) commit();
-        if (e.key === 'Escape') show();
-      };
-      q.focus();
-    }
-    function remove() {
-      deck.cards = deck.cards.filter((c) => c !== card);
-      save(); drawList();
-    }
-    show();
-    return li;
-  }
-
-  function exportCSV() {
-    const blob = new Blob([toCSV(deck.cards)], { type: 'text/csv' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `${deck.name.replace(/[^\w-]+/g, '_')}.csv` });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }
-
-  async function deleteDeck() {
-    const n = deck.cards.length;
-    const ok = await modal({
-      title: `Delete “${deck.name}”?`,
-      message: `This removes the deck and its ${n} card${n === 1 ? '' : 's'}. This can’t be undone.`,
-      confirmLabel: 'Delete deck',
-      danger: true,
-    });
-    if (!ok) return;
-    state.decks = state.decks.filter((d) => d !== deck);
-    save();
-    navigate('#/');
-  }
-
-  viewEl.append(deckPanel, h('section', { class: 'panel' }, h('h2', {}, 'Add a card'), form), importPanel, listPanel);
-  drawList();
+function finished(message, again) {
+  viewEl.replaceChildren(h('div', { class: 'done' },
+    h('p', { class: 'done-emoji', 'aria-hidden': 'true' }, '🎉'),
+    h('h2', {}, 'Done!'),
+    h('p', { class: 'muted' }, message),
+    h('div', { class: 'modal-actions center' },
+      h('a', { class: 'btn', href: '#/' }, 'Back to decks'),
+      h('button', { class: 'btn primary', onclick: again }, 'Go again')),
+  ));
 }
 
-const views = { study: studyView, connect: connectView, edit: editView };
 render();
